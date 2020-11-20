@@ -50,6 +50,7 @@ Tk().withdraw()
 filename = askopenfilename()
 
 entrypointName = input("Name of the circuit to parse (Enter nothing for Main)? ")
+smartNaming = input("Smart naming (y/n)? ") == "y"
 
 file = open(filename)
 root = json.load(file)
@@ -153,19 +154,19 @@ def getOutputIds(gate):
         outputs.extend(gate['outputNodes'])
     return outputs
 
-finalOutput = ""
-def buildHDL(scopeId, outputNode): # farthest node in the chain (aka outputs first)
-    global finalOutput
+def buildHDL(scopeId, outputNode, toReplace): # farthest node in the chain (aka outputs first)
+    finalOutput = ""
     if not outputNode.parsed and outputNode.chipId != -1: # input id
         outputNode.parsed = True
 
         chipData = chips[outputNode.chipId]
         outputText = chipData.hdlName + '('
         outputConnections = []
+        inputNames = []
 
         for connection in allScopes[scopeId].connections:
             if connection.toId == outputNode.id:
-                buildHDL(scopeId, getNodeFromId(scopeId, connection.fromId))
+                finalOutput += buildHDL(scopeId, getNodeFromId(scopeId, connection.fromId), toReplace)
                 if connection.inputId + 1 > len(chipData.inputNames):
                     outputText += chr(ord('a') + connection.inputId)
                 else:
@@ -174,10 +175,13 @@ def buildHDL(scopeId, outputNode): # farthest node in the chain (aka outputs fir
                     inputNode = getNodeFromId(scopeId, connection.fromId)
                     if inputNode.label != "":
                         outputText += '=' + inputNode.label + ','
+                        inputNames.append(inputNode.label)
                     else:
                         outputText += "=input" + str(connection.fromId) + ','
+                        inputNames.append("input" + str(connection.fromId))
                 else:
                     outputText += "=output" + str(connection.fromId) + 'o' + str(connection.outputId) + ','
+                    inputNames.append("output" + str(connection.fromId) + 'o' + str(connection.outputId))
             elif connection.fromId == outputNode.id and connection.toId in allScopes[scopeId].outputNodes:
                 outputConnections.append(connection)
 
@@ -197,16 +201,29 @@ def buildHDL(scopeId, outputNode): # farthest node in the chain (aka outputs fir
                         outputText += "out" + str(i) + ','
                     break
             if not found:
-                outputText += "output" + str(outputNode.id) + 'o' + str(i) + ','
+                outputName = "output" + str(outputNode.id) + 'o' + str(i)
+                outputText += outputName + ','
+                if smartNaming:
+                    replaceText = ""
+                    for name in inputNames:
+                        replaceText += name
+                    replaceText += chipData.hdlName
+                    if i + 1 > len(chipData.outputNames):
+                        replaceText += str(i)
+                    elif chipData.outputNames[i] != "out":
+                        replaceText += chipData.outputNames[i]
+                    toReplace[outputName] = replaceText
 
         outputText = outputText[:-1]
         outputText += ");\n"
 
         if chipData.hdlName != "Out":
             finalOutput += outputText
+    return finalOutput
 
+globalOutput = "" 
 def parseScope(scopeId):
-    global finalOutput
+    global globalOutput
     if not allScopes[scopeId].parsed:
         allScopes[scopeId].parsed = True
 
@@ -260,12 +277,12 @@ def parseScope(scopeId):
                 newChip.inputNames.append(inputNode.label)
             ioId += 1
 
-        finalOutput += "Definition for " + scopeName + ":\n\n"
-
         ioId = 0
+        finalOutput = "Definition for " + scopeName + ":\n\n"
+        toReplace = {}
         for output in allScopes[scopeId].outputNodes:
             outputNode = getNodeFromId(scopeId, output)
-            buildHDL(scopeId, outputNode)
+            finalOutput += buildHDL(scopeId, outputNode, toReplace)
 
             if outputNode.label == "":
                 newChip.outputNames.append(chr(ord('a') + ioId))
@@ -273,8 +290,14 @@ def parseScope(scopeId):
                 newChip.outputNames.append(outputNode.label)
             ioId += 1
 
+        if smartNaming:
+            for i in range(0, 2): # do it twice to make sure in/out both get replaced
+                for replacing in toReplace.keys():
+                    finalOutput = finalOutput.replace(replacing, toReplace[replacing])
+
         finalOutput += "\n\n"
-        
+        globalOutput += finalOutput
+
         chips.append(newChip)
 
 
@@ -292,6 +315,8 @@ if entrypointName != "":
 else:
     parseScope(0)
 
+clear = '\n' * 100
+
 if success: 
-    print('\n' * 100)
-    print(finalOutput)
+    print(clear)
+    print(globalOutput)
