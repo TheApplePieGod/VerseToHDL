@@ -46,9 +46,10 @@ class Scope:
         self.connections = []
 
 
-#Tk().withdraw()
-#filename = askopenfilename()
-filename = 'C:/Users/Evan/Desktop/project01.txt'
+Tk().withdraw()
+filename = askopenfilename()
+
+entrypointName = input("Name of the circuit to parse (Enter nothing for Main)? ")
 
 file = open(filename)
 root = json.load(file)
@@ -80,6 +81,12 @@ allScopes = []
 def getScopeIdFromId(id):
     for i in range(0, len(allScopes)):
         if allScopes[i].scopeData['id'] == id:
+            return i
+    return -1
+
+def getScopeIdFromName(name):
+    for i in range(0, len(allScopes)):
+        if allScopes[i].scopeData['name'] == name:
             return i
     return -1
 
@@ -274,9 +281,17 @@ def parseScope(scopeId):
 for scope in scopes:
     allScopes.append(Scope(scope, False))
 
-parseScope(7)
+success = True
+if entrypointName != "":
+    scopeId = getScopeIdFromName(entrypointName)
+    if scopeId == -1:
+        success = False
+        print("Circuit not found, ending program.")
+    else:
+        parseScope(scopeId)
+else:
+    parseScope(0)
 
-print(finalOutput)
-
-#for chip in chips:
-#    print(chip)
+if success: 
+    print('\n' * 100)
+    print(finalOutput)
