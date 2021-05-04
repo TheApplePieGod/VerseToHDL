@@ -3,25 +3,27 @@ from tkinter import Tk
 from tkinter.filedialog import askopenfilename
 
 class Chip:
-    def __init__(self, hdlName, id, inputNames, outputNames):
+    def __init__(self, hdlName, id, inputNames, outputNames, bitDepth):
         self.hdlName = hdlName
         self.id = id
         self.inputNames = inputNames
         self.outputNames = outputNames
+        self.bitDepth = bitDepth
     def __str__(self):
-        return "Chip: [name: %s, id: %d, inputNames: %s, outputNames: %s]" % (self.hdlName, self.id, str(self.inputNames), str(self.outputNames))
+        return "Chip: [name: %s, id: %d, inputNames: %s, outputNames: %s, bitDepth: %d]" % (self.hdlName, self.id, str(self.inputNames), str(self.outputNames), self.bitDepth)
 
 class Node:
     traversed = False
     parsed = False
-    def __init__(self, label, chipId, id, outputIds, inputIds):
+    def __init__(self, label, chipId, id, outputIds, inputIds, bitDepth):
         self.label = label
         self.chipId = chipId
         self.id = id
         self.outputIds = outputIds
         self.inputIds = inputIds
+        self.bitDepth = bitDepth
     def __str__(self):
-        return "Node: [label: %s, chipId: %d, id: %d, outputIds: %s, inputIds: %s" % (self.label, self.chipId, self.id, str(self.outputIds), str(self.inputIds))
+        return "Node: [label: %s, chipId: %d, id: %d, outputIds: %s, inputIds: %s, bitDepth: %d]" % (self.label, self.chipId, self.id, str(self.outputIds), str(self.inputIds), self.bitDepth)
 
 class Connection:
     def __init__(self, fromId, toId, inputId, outputId):
@@ -45,7 +47,6 @@ class Scope:
         self.nodes = []
         self.connections = []
 
-
 Tk().withdraw()
 filename = askopenfilename()
 
@@ -59,13 +60,17 @@ file.close()
 
 # Chip dictionary
 chips = []
-chips.append(Chip("And", 0, ['a', 'b'], ['out']))
-chips.append(Chip("Or", 1, ['a', 'b'], ['out']))
-chips.append(Chip("Not", 2, ['in'], ['out']))
-chips.append(Chip("Nand", 3, ['a', 'b'], ['out']))
-chips.append(Chip("Nor", 4, ['a', 'b'], ['out']))
-chips.append(Chip("Xor", 5, ['a', 'b'], ['out']))
-chips.append(Chip("Out", 6, [], []))
+chips.append(Chip("And", 0, ['a', 'b'], ['out'], 1))
+chips.append(Chip("Or", 1, ['a', 'b'], ['out'], 1))
+chips.append(Chip("Not", 2, ['in'], ['out'], 1))
+chips.append(Chip("Nand", 3, ['a', 'b'], ['out'], 1))
+chips.append(Chip("Nor", 4, ['a', 'b'], ['out'], 1))
+chips.append(Chip("Xor", 5, ['a', 'b'], ['out'], 1))
+chips.append(Chip("Splitter", 6, [], [], 1))
+chips.append(Chip("Mux", 7, ['a', 'b', 'sel'], ['out'], 1))
+chips.append(Chip("Mux4Way", 8, ['a', 'b', 'c', 'd', 'sel'], ['out'], 1))
+chips.append(Chip("Mux8Way", 9, ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'sel'], ['out'], 1))
+chips.append(Chip("Out", 10, [], [], 1))
 # ------------------------------------
 
 gateNames = {
@@ -74,7 +79,11 @@ gateNames = {
     'NotGate': 2,
     'NandGate': 3,
     'NorGate': 4,
-    'XorGate': 5
+    'XorGate': 5,
+    'Splitter': 6,
+    'Mux': 7,
+    'Mux4Way': 8,
+    'Mux8Way': 9
 }
 
 allScopes = []
@@ -95,6 +104,12 @@ def getChipIdFromScope(scopeId):
     scopeName = allScopes[scopeId].scopeData['name']
     for i in range(0, len(chips)):
         if chips[i].hdlName == scopeName:
+            return i
+    return -1
+
+def findConnection(scopeId, nodeId):
+    for i in range(0, len(allScopes[scopeId].connections)):
+        if allScopes[scopeId].connections[i].toId == nodeId:
             return i
     return -1
 
@@ -150,6 +165,8 @@ def getOutputIds(gate):
             outputs.extend(wireData['output'])
         elif 'output1' in wireData:
             outputs.append(wireData['output1'])
+        elif 'outputs' in wireData:
+            outputs.extend(wireData['outputs'])
     elif 'outputNodes' in gate:
         outputs.extend(gate['outputNodes'])
     return outputs
@@ -160,7 +177,7 @@ def buildHDL(scopeId, outputNode, toReplace): # farthest node in the chain (aka 
         outputNode.parsed = True
 
         chipData = chips[outputNode.chipId]
-        outputText = chipData.hdlName + '('
+        outputText = chipData.hdlName + (str(outputNode.bitDepth) if outputNode.bitDepth > 1 else "") + '('
         outputConnections = []
         inputNames = []
 
@@ -171,25 +188,46 @@ def buildHDL(scopeId, outputNode, toReplace): # farthest node in the chain (aka 
                     outputText += chr(ord('a') + connection.inputId)
                 else:
                     outputText += chipData.inputNames[connection.inputId]
-                if connection.fromId in allScopes[scopeId].inputNodes:
-                    inputNode = getNodeFromId(scopeId, connection.fromId)
+
+                fromSplitter = False
+                actualInputId = connection.fromId
+                if chips[allScopes[scopeId].nodes[connection.fromId].chipId].hdlName == "Splitter": # if we are getting an input from a splitter, actually use the output of the splitter's input
+                    fromSplitter = True
+                    connectionId = findConnection(scopeId, connection.fromId)
+                    if connectionId != -1:
+                        actualInputId = allScopes[scopeId].connections[connectionId].fromId
+                    
+                if actualInputId in allScopes[scopeId].inputNodes:
+                    inputNode = getNodeFromId(scopeId, actualInputId)
                     if inputNode.label != "":
-                        outputText += '=' + inputNode.label + ','
+                        outputText += '=' + inputNode.label
                         inputNames.append(inputNode.label)
                     else:
-                        outputText += "=input" + str(connection.fromId) + ','
-                        inputNames.append("input" + str(connection.fromId))
+                        outputText += "=input" + str(actualInputId)
+                        inputNames.append("input" + str(actualInputId))
+
+                    if fromSplitter:
+                        outputText += '[' + str(connection.outputId) + ']'
+                        
+                    outputText += ','
                 else:
-                    outputText += "=output" + str(connection.fromId) + 'o' + str(connection.outputId) + ','
-                    inputNames.append("output" + str(connection.fromId) + 'o' + str(connection.outputId))
+                    outputText += "=output" + str(actualInputId) + 'o' + str(connection.outputId)
+                    inputNames.append("output" + str(actualInputId) + 'o' + str(connection.outputId))
+
+                    if fromSplitter:
+                        outputText += '[' + str(connection.outputId) + ']'
+                    
+                    outputText += ','
             elif connection.fromId == outputNode.id and connection.toId in allScopes[scopeId].outputNodes:
                 outputConnections.append(connection)
 
         for i in range(0, len(outputNode.outputIds)):
+            outText = ""
             if i + 1 > len(chipData.outputNames):
-                outputText += "out" + str(i) + '='
+                outText = "out" + str(i) + '='
             else:
-                outputText += chipData.outputNames[i] + '='
+                outText = chipData.outputNames[i] + '='
+            outputText += outText
             found = False
             for connection in outputConnections:
                 if connection.outputId == i:
@@ -200,24 +238,25 @@ def buildHDL(scopeId, outputNode, toReplace): # farthest node in the chain (aka 
                     else:
                         outputText += "out" + str(i) + ','
                     break
-            if not found:
-                outputName = "output" + str(outputNode.id) + 'o' + str(i)
-                outputText += outputName + ','
-                if smartNaming:
-                    replaceText = ""
-                    for name in inputNames:
-                        replaceText += name
-                    replaceText += chipData.hdlName
-                    if i + 1 > len(chipData.outputNames):
-                        replaceText += str(i)
-                    elif chipData.outputNames[i] != "out":
-                        replaceText += chipData.outputNames[i]
-                    toReplace[outputName] = replaceText
+            if found:
+                outputText += outText
+            outputName = "output" + str(outputNode.id) + 'o' + str(i)
+            outputText += outputName + ','
+            if smartNaming:
+                replaceText = ""
+                for name in inputNames:
+                    replaceText += name
+                replaceText += chipData.hdlName
+                if i + 1 > len(chipData.outputNames):
+                    replaceText += str(i)
+                elif chipData.outputNames[i] != "out":
+                    replaceText += chipData.outputNames[i]
+                toReplace[outputName] = replaceText
 
         outputText = outputText[:-1]
         outputText += ");\n"
 
-        if chipData.hdlName != "Out":
+        if chipData.hdlName != "Out" and chipData.hdlName != "Splitter":
             finalOutput += outputText
     return finalOutput
 
@@ -234,16 +273,37 @@ def parseScope(scopeId):
             gateList = allScopes[scopeId].scopeData[key]     
             if key in gateNames:
                 for gate in gateList:
-                    allScopes[scopeId].nodes.append(Node(gate['label'], int(gateNames[key]), uniqueId, getOutputIds(gate), getInputIds(gate)))
+                    bitDepth = 1
+                    if key == "Splitter":
+                        bitDepth = 0
+                    elif key == "NotGate":
+                        bitDepth = int(gate['customData']['constructorParamaters'][1])
+                    else:
+                        bitDepth = int(gate['customData']['constructorParamaters'][2])
+                    allScopes[scopeId].nodes.append(Node(gate['label'], int(gateNames[key]), uniqueId, getOutputIds(gate), getInputIds(gate), bitDepth))
+                    uniqueId += 1
+            elif key == 'Multiplexer':
+                for gate in gateList:
+                    bitDepth = int(gate['customData']['constructorParamaters'][1])
+                    inputIds = getInputIds(gate)
+                    gateName = "Mux"
+
+                    if len(inputIds) == 4:
+                        gateName = "Mux4Way"
+                    elif len(inputIds) == 8:
+                        gateName = "Mux8Way"
+
+                    inputIds.append(gate['customData']['nodes']['controlSignalInput'])
+                    allScopes[scopeId].nodes.append(Node(gate['label'], int(gateNames[gateName]), uniqueId, getOutputIds(gate), inputIds, bitDepth))
                     uniqueId += 1
             elif key == 'Input':
                 for gate in gateList:
-                    allScopes[scopeId].nodes.append(Node(gate['label'], -1, uniqueId, getOutputIds(gate), []))
+                    allScopes[scopeId].nodes.append(Node(gate['label'], -1, uniqueId, getOutputIds(gate), [], int(gate['customData']['constructorParamaters'][1])))
                     allScopes[scopeId].inputNodes.append(uniqueId)
                     uniqueId += 1
             elif key == 'Output':
                 for gate in gateList:
-                    allScopes[scopeId].nodes.append(Node(gate['label'], 6, uniqueId, [], getInputIds(gate)))
+                    allScopes[scopeId].nodes.append(Node(gate['label'], 6, uniqueId, [], getInputIds(gate), int(gate['customData']['constructorParamaters'][1])))
                     allScopes[scopeId].outputNodes.append(uniqueId)
                     uniqueId += 1
             elif key == 'SubCircuit':
@@ -258,11 +318,11 @@ def parseScope(scopeId):
                     if chipId == -1:
                         raise Exception("Subchip not found")
                     else:
-                        allScopes[scopeId].nodes.append(Node("", chipId, uniqueId, getOutputIds(subcircuit), getInputIds(subcircuit)))
+                        allScopes[scopeId].nodes.append(Node("", chipId, uniqueId, getOutputIds(subcircuit), getInputIds(subcircuit), 1))
                         uniqueId += 1
 
         # create a new chip for this subcircuit
-        newChip = Chip("", -1, [], [])
+        newChip = Chip("", -1, [], [], 1)
         newChip.hdlName = scopeName
         newChip.id = len(chips)
 
@@ -305,15 +365,17 @@ for scope in scopes:
     allScopes.append(Scope(scope, False))
 
 success = True
+mainScopeId = 0
 if entrypointName != "":
-    scopeId = getScopeIdFromName(entrypointName)
-    if scopeId == -1:
-        success = False
-        print("Circuit not found, ending program.")
-    else:
-        parseScope(scopeId)
+    mainScopeId = getScopeIdFromName(entrypointName)
 else:
-    parseScope(0)
+    mainScopeId = getScopeIdFromName("Main")
+
+if mainScopeId == -1:
+    success = False
+    print("Circuit not found, ending program.")
+else:
+    parseScope(mainScopeId)
 
 clear = '\n' * 100
 
