@@ -113,6 +113,26 @@ def findConnection(scopeId, nodeId):
             return i
     return -1
 
+def toSplitterConnection(scopeId, nodeId):
+    for i in range(0, len(allScopes[scopeId].connections)):
+        if allScopes[scopeId].connections[i].fromId == nodeId and chips[allScopes[scopeId].nodes[allScopes[scopeId].connections[i].toId].chipId].hdlName == "Splitter":
+            return i
+    return -1
+
+def isSplitterCombining(scopeId, nodeId): # splitter is combining if there are multiple connections to it and only one from
+    inputCount = 0
+    outputCount = 0
+    for i in range(0, len(allScopes[scopeId].connections)):
+        if allScopes[scopeId].connections[i].fromId == nodeId:
+            outputCount += 1
+        elif allScopes[scopeId].connections[i].toId == nodeId:
+            inputCount += 1
+
+        if inputCount > 1:
+            return True
+        elif outputCount > 1:
+            return False
+
 def traverseWires(wireId, fromWireId, allWires, outputIds):
     connections = allWires[wireId]['connections']
     if len(connections) == 1 and connections[0] == fromWireId:
@@ -189,14 +209,19 @@ def buildHDL(scopeId, outputNode, toReplace): # farthest node in the chain (aka 
                 else:
                     outputText += chipData.inputNames[connection.inputId]
 
+                # Splitter data
                 fromSplitter = False
+                splitterCombining = False
                 actualInputId = connection.fromId
+                actualOutputId = connection.outputId
                 if chips[allScopes[scopeId].nodes[connection.fromId].chipId].hdlName == "Splitter": # if we are getting an input from a splitter, actually use the output of the splitter's input
                     fromSplitter = True
+                    splitterCombining = isSplitterCombining(scopeId, connection.fromId)
                     connectionId = findConnection(scopeId, connection.fromId)
                     if connectionId != -1:
                         actualInputId = allScopes[scopeId].connections[connectionId].fromId
-                    
+                        actualOutputId = allScopes[scopeId].connections[connectionId].outputId
+                        
                 if actualInputId in allScopes[scopeId].inputNodes:
                     inputNode = getNodeFromId(scopeId, actualInputId)
                     if inputNode.label != "":
@@ -207,15 +232,15 @@ def buildHDL(scopeId, outputNode, toReplace): # farthest node in the chain (aka 
                         inputNames.append("input" + str(actualInputId))
 
                     if fromSplitter:
-                        outputText += '[' + str(connection.outputId) + ']'
+                        outputText += 's' + str(connection.outputId)
                         
                     outputText += ','
                 else:
-                    outputText += "=output" + str(actualInputId) + 'o' + str(connection.outputId)
-                    inputNames.append("output" + str(actualInputId) + 'o' + str(connection.outputId))
+                    outputText += "=output" + str(actualInputId) + 'o' + str(actualOutputId)
+                    inputNames.append("output" + str(actualInputId) + 'o' + str(actualOutputId))
 
                     if fromSplitter:
-                        outputText += '[' + str(connection.outputId) + ']'
+                        outputText += 's' + str(connection.outputId)
                     
                     outputText += ','
             elif connection.fromId == outputNode.id and connection.toId in allScopes[scopeId].outputNodes:
@@ -224,34 +249,44 @@ def buildHDL(scopeId, outputNode, toReplace): # farthest node in the chain (aka 
         for i in range(0, len(outputNode.outputIds)):
             outText = ""
             if i + 1 > len(chipData.outputNames):
-                outText = "out" + str(i) + '='
+                outText = "out" + str(i)
             else:
-                outText = chipData.outputNames[i] + '='
-            outputText += outText
-            found = False
+                outText = chipData.outputNames[i]
             for connection in outputConnections:
                 if connection.outputId == i:
-                    found = True
                     foundNode = getNodeFromId(scopeId, connection.toId)
+                    outputText += outText + '='
                     if foundNode.label != "":
                         outputText += foundNode.label + ','
                     else:
                         outputText += "out" + str(i) + ','
                     break
-            if found:
-                outputText += outText
-            outputName = "output" + str(outputNode.id) + 'o' + str(i)
-            outputText += outputName + ','
-            if smartNaming:
-                replaceText = ""
-                for name in inputNames:
-                    replaceText += name
-                replaceText += chipData.hdlName
-                if i + 1 > len(chipData.outputNames):
-                    replaceText += str(i)
-                elif chipData.outputNames[i] != "out":
-                    replaceText += chipData.outputNames[i]
-                toReplace[outputName] = replaceText
+
+            splitterId = toSplitterConnection(scopeId, outputNode.id)
+            splitCount = 1
+            isSplitter = False
+            if splitterId != -1:
+                isSplitter = True
+                splitCount = outputNode.bitDepth
+
+            for j in range(0, splitCount):
+                outputName = "output" + str(outputNode.id) + 'o' + str(i)
+                if isSplitter:
+                    outputText += outText + '[' + str(j) + ']' '='
+                    outputName += 's' + str(j)
+                else:
+                    outputText += outText + '='
+                outputText += outputName + ','
+                if smartNaming:
+                    replaceText = ""
+                    for name in inputNames:
+                        replaceText += name
+                    replaceText += chipData.hdlName
+                    if i + 1 > len(chipData.outputNames):
+                        replaceText += str(i)
+                    elif chipData.outputNames[i] != "out":
+                        replaceText += chipData.outputNames[i]
+                    toReplace[outputName] = replaceText
 
         outputText = outputText[:-1]
         outputText += ");\n"
